@@ -98,19 +98,42 @@ $Records = @()
 $Records += New-AzPrivateDnsRecordConfig -IPv4Address $lbIpAddress
 New-AzPrivateDnsRecordSet -Name "todo" -RecordType A -ResourceGroupName $resourceGroupName -TTL 1800 -ZoneName $privateDnsZoneName -PrivateDnsRecords $Records
 
-# Prepare variables, required for creation and configuration of load balancer - 
-# you will need them to setup a load balancer 
-$webSubnetId = (Get-AzVirtualNetworkSubnetConfig -Name $webSubnetName -VirtualNetwork $virtualNetwork).Id
-
-# Write your code here -> 
+# ---------------- Load Balancer ----------------
 Write-Host "Creating a load balancer ..."
 
+# Frontend IP configuration (internal, fixed IP in web subnet)
+$frontend = New-AzLoadBalancerFrontendIpConfig -Name "LB-Frontend" `
+  -PrivateIpAddress $lbIpAddress `
+  -SubnetId $webSubnetId
 
-# Write-Host "Adding VMs to the backend pool"
-# $vms = Get-AzVm -ResourceGroupName $resourceGroupName | Where-Object {$_.Name.StartsWith($webVmName)}
-# foreach ($vm in $vms) {
-#    $nic = Get-AzNetworkInterface -ResourceGroupName $resourceGroupName | Where-Object {$_.Id -eq $vm.NetworkProfile.NetworkInterfaces.Id}    
-#    $ipCfg = $nic.IpConfigurations | Where-Object {$_.Primary} 
-#    $ipCfg.LoadBalancerBackendAddressPools.Add($bepool)
-#    Set-AzNetworkInterface -NetworkInterface $nic
-# }
+# Backend pool
+$bepool = New-AzLoadBalancerBackendAddressPoolConfig -Name "LB-BackEndPool"
+
+# Health probe on port 8080 (TCP)
+$probe = New-AzLoadBalancerProbeConfig -Name "HealthProbe8080" `
+  -Protocol Tcp -Port 8080 -IntervalInSeconds 5 -ProbeCount 2
+
+# Load balancing rule: frontend port 80 -> backend port 8080
+$lbrule = New-AzLoadBalancerRuleConfig -Name "HTTPRule" `
+  -FrontendIpConfiguration $frontend `
+  -BackendAddressPool $bepool `
+  -Probe $probe `
+  -Protocol Tcp -FrontendPort 80 -BackendPort 8080
+
+# Create the Load Balancer
+$lb = New-AzLoadBalancer -ResourceGroupName $resourceGroupName `
+  -Name $lbName -Location $location `
+  -FrontendIpConfiguration $frontend `
+  -BackendAddressPool $bepool `
+  -Probe $probe `
+  -LoadBalancingRule $lbrule
+
+# ---------------- Attach VMs to Backend Pool ----------------
+Write-Host "Adding VMs to the backend pool"
+$vms = Get-AzVm -ResourceGroupName $resourceGroupName | Where-Object {$_.Name.StartsWith($webVmName)}
+foreach ($vm in $vms) {
+   $nic = Get-AzNetworkInterface -ResourceGroupName $resourceGroupName | Where-Object {$_.Id -eq $vm.NetworkProfile.NetworkInterfaces.Id}
+   $ipCfg = $nic.IpConfigurations | Where-Object {$_.Primary}
+   $ipCfg.LoadBalancerBackendAddressPools.Add($bepool)
+   Set-AzNetworkInterface -NetworkInterface $nic
+}
