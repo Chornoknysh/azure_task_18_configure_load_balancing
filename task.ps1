@@ -101,7 +101,10 @@ New-AzPrivateDnsRecordSet -Name "todo" -RecordType A -ResourceGroupName $resourc
 # ---------------- Load Balancer ----------------
 Write-Host "Creating a load balancer ..."
 
-# Frontend IP configuration (internal, fixed IP in web subnet)
+# Get subnet ID for frontend IP
+$webSubnetId = ($virtualNetwork.Subnets | Where-Object {$_.Name -eq $webSubnetName}).Id
+
+# Frontend IP configuration
 $frontend = New-AzLoadBalancerFrontendIpConfig -Name "LB-Frontend" `
   -PrivateIpAddress $lbIpAddress `
   -SubnetId $webSubnetId
@@ -109,11 +112,11 @@ $frontend = New-AzLoadBalancerFrontendIpConfig -Name "LB-Frontend" `
 # Backend pool
 $bepool = New-AzLoadBalancerBackendAddressPoolConfig -Name "LB-BackEndPool"
 
-# Health probe on port 8080 (TCP)
+# Health probe on port 8080
 $probe = New-AzLoadBalancerProbeConfig -Name "HealthProbe8080" `
   -Protocol Tcp -Port 8080 -IntervalInSeconds 5 -ProbeCount 2
 
-# Load balancing rule: frontend port 80 -> backend port 8080
+# Load balancing rule: frontend 80 -> backend 8080
 $lbrule = New-AzLoadBalancerRuleConfig -Name "HTTPRule" `
   -FrontendIpConfiguration $frontend `
   -BackendAddressPool $bepool `
@@ -130,10 +133,18 @@ $lb = New-AzLoadBalancer -ResourceGroupName $resourceGroupName `
 
 # ---------------- Attach VMs to Backend Pool ----------------
 Write-Host "Adding VMs to the backend pool"
+
+# Get actual backend pool from created LB
+$bepool = Get-AzLoadBalancerBackendAddressPoolConfig -LoadBalancer $lb -Name "LB-BackEndPool"
+
 $vms = Get-AzVm -ResourceGroupName $resourceGroupName | Where-Object {$_.Name.StartsWith($webVmName)}
 foreach ($vm in $vms) {
-   $nic = Get-AzNetworkInterface -ResourceGroupName $resourceGroupName | Where-Object {$_.Id -eq $vm.NetworkProfile.NetworkInterfaces.Id}
+   $nicId = $vm.NetworkProfile.NetworkInterfaces[0].Id
+   $nicName = Split-Path $nicId -Leaf
+   $nic = Get-AzNetworkInterface -ResourceGroupName $resourceGroupName -Name $nicName
+
    $ipCfg = $nic.IpConfigurations | Where-Object {$_.Primary}
    $ipCfg.LoadBalancerBackendAddressPools.Add($bepool)
+
    Set-AzNetworkInterface -NetworkInterface $nic
 }
